@@ -1,0 +1,396 @@
+---
+title: "IST Bank & Trust Personal Equity Plan Association Rules"
+author: "Tim Hulak"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+# Import libraries for analysis 
+library(wordcloud2)
+library(ggplot2)
+library(arules)
+library(arulesViz)
+library(e1071)
+library(dplyr)
+```
+
+
+-----------------------------
+
+# Introduction 
+
+-----------------------------
+
+IST Bank & Trust is reviewing their customer records and wants determine which customer attributes may result in utilizing the new Personal Equity Plan (PEP). A mailing campaign was executed by the Customer Relations & Outreach Department and the results were recorded for this project. In order to identify the correct customers to market this new product to, the technique of Association Rule Mining will be used. This is a data mining method which identifies frequent patterns within a dataset and can help IST Bank & Trust identify attributes in customers that may be good candidates for the new PEP. 
+
+The Marketing Department keeps records on customers, including demographic information and number of accounts types. A direct mail piece, advertising the PEP, was sent to existing customers, and a record was kept as to whether that customer responded and bought the product. Based on this store of prior experience, the managers decide to use data mining techniques to build customer profile models.
+
+The goal of this initiative is to perform Association Rule discovery on the provided dataset. Overall, the aim is to identify 20-30 strong rules (rules with high lift and confidence which at the same time have relatively good support) in an effort to identify the best customers to offer a PEP to. Following this analysis, the results will be shared with both the Marketing Department and the Customer Relations & Outreach Department in order to begin developing email and SMS campaigns directed at the identified customers and those who are similar.
+
+-----------------------------
+
+# Analysis and Models
+
+-----------------------------
+
+## About the Data
+The data for this initiative was provided by the Customer Records department at IST Bank & Trust. The dataset contains attributes on each customers demographics and banking information. There are 600 observations of 12 variables:
+
+  + **ID**: A unique identification number
+  + **Age**: The age of customer in years
+  + **Sex**: Male or Female
+  + **Region**: What sort of area does the customer live in
+  + **Income**: Annual income of customer
+  + **Married**: Is the customer married (YES/NO)
+  + **Children**: number of children
+  + **Car**: Does the customer own a car (YES/NO)
+  + **Savings Account**: Does the customer have a saving account (YES/NO)
+  + **Current Account**: Does the customer have a current account with IST Bank & Trust (YES/NO)
+  + **Mortgage**: Does the customer have a mortgage (YES/NO)
+  + **PEP**: Did the customer buy a PEP after the last mailing (YES/NO)
+
+```{r}
+#Read in Data
+bank_data_raw <- read.csv("/Users/timhulak/Desktop/Syracuse/IST-707\ Data\ Analytics/Week_3/bankdata_csv_all.csv")
+bank_data <- read.csv("/Users/timhulak/Desktop/Syracuse/IST-707\ Data\ Analytics/Week_3/bankdata_csv_all.csv")
+# Preview data
+head(bank_data)
+```
+```{r}
+# Summarize the Data
+summary(bank_data)
+```
+
+-----------------------------
+
+### Data Preprocessing 
+
+```{r}
+# Preview the Structure of the data
+str(bank_data)
+```
+
+As seen in the above output, the raw dataset is a mix of character text and integer values. The first step in the preprocessing phase was to convert candidate variables into nominal variables. In other words, columns with values such as "yes" or "no" are converted into factors instead of simply leaving them as text. This will assist in future analysis phases as well as within the algorithm used to determine association rules.
+
+
+```{r}
+# Convert  columns to factors
+bank_data$married <- factor(bank_data$married)
+bank_data$children <- factor(bank_data$children)
+bank_data$sex <- factor(bank_data$sex)
+bank_data$car <- factor(bank_data$car)
+bank_data$save_act <- factor(bank_data$save_act)
+bank_data$current_act <- factor(bank_data$current_act)
+bank_data$mortgage <- factor(bank_data$mortgage)
+bank_data$pep <- factor(bank_data$pep)
+bank_data$region <- factor(bank_data$region)
+
+# Preview the structure of the new data to ensure that the change was made 
+str(bank_data)
+```
+
+The next step is to eliminate the ID column. While this column is useful for identifying an individual customer, it is a unique identification number. This means that it will only disrupt the association rule mining process because each value only appears once and will yield no meaningful result.
+
+```{r}
+# Slice the original dataframe to exclude the first row
+data <- bank_data[ , -1 ]
+
+# Preview the data
+head(data)
+```
+
+Next, the data is to be discretized, meaning that it will be grouped into like-values and placed into bins in order to categorize the analysis results. Age and income were the numeric variables chosen to be discretized. The ages were bucketed in groups of 10 years and income was bucketed into bins of $10,000^00^. 
+
+```{r}
+# Discretize Age
+data$age <- cut(data$age, breaks = c(0,10,20,30,40,50,60,Inf), labels = c("CHILD","TEENS","TWENTIES","THIRTIES","FORTIES","FIFTIES","SENIOR"))
+
+# Discretize  Income
+data$income <- cut(data$income, breaks = c(0,10000,20000,30000,40000,50000,60000,70000,Inf), labels = c("Less Than 10k","10k-20k","20k-30k","30k-40k","40k-50k","50k-60k","60k-70k","Greater Thank 70k"))
+
+# Convert into factors
+bank_data$age <- factor(bank_data$age)
+bank_data$income <- factor(bank_data$income)
+
+head(data)
+```
+
+
+Once the dataset has been prepped, a final check for any missing data was performed. First, the number of complete cases (rows with a valid value in each column) was determined. In order to accomplish this, a count of the rows that are not complete cases is conducted; a count of rows where at least one column was missing a value. In the case of this dataset, all rows are complete cases. 
+
+```{r}
+nrow(data[!complete.cases(data),])
+```
+
+To be thorough, a tally of the NA values in each column individually was conducted. In other words, a scan was done across each column to check for any values that were missing or not applicable. In this dataset, there were no NA values in any of the columns.
+
+```{r}
+for (column in 1:ncol(data)){
+  print(paste(colnames(data)[column],": ",length(which(is.na(data[,column])))," NA Values"))
+}
+```
+
+-----------------------------
+
+### Customer Profile
+
+A brief customer profile can be summarized from the the Exploratory Data Analysis conducted on the dataset. The age of the customers rangeed from 18 - 67 years old with both an average and median age of 42. The annual income of the customers ranged from $5,014^00^ - $63,130^00^ with an average of $27,524^00^ and a median of $24,925^00^. Finally, the customers had between 1 - 3 children with an average and median of 1 child.
+
+Based on these figures, it can be conclude that the typical customer at IST Bank & Trust is likely middle-aged, on the lower end of the annual income scale, has at least 1 dependent that they will claim on their taxes, lives in the Inner City, and there is a slight chance that they already have a PEP with IST Bank & Trust.
+
+-----------------------------
+
+## Exploratory Data Analysis (EDA)
+
+-----------------------------
+
+##### Region Word Cloud
+```{r}
+region_freq_table <- data.frame(
+  "Region" = c("Inner City", "Rural", "Suburban", "Town"),
+  "Freq" = c(269, 96, 62, 173)
+)
+
+wordcloud2(region_freq_table, size = .5)
+```
+Most of the customers live in the Inner City (`r round((269/sum(region_freq_table$Freq))*100,2)`%). This is followed by Town at `r round((173/sum(region_freq_table$Freq))*100,2)`%, Rural at `r round((96/sum(region_freq_table$Freq))*100,2)`% and Suburban at `r round((62/sum(region_freq_table$Freq))*100,2)`%.
+
+-----------------------------
+
+#### Sex donut chart
+```{r}
+sex_freq <- as.data.frame(table(data$sex))
+names(sex_freq)[1] = 'Sex'
+
+# Compute percentages
+sex_freq$fraction <- sex_freq$Freq / sum(sex_freq$Freq)
+
+# Compute the cumulative percentages (top of each rectangle)
+sex_freq$ymax <- cumsum(sex_freq$fraction)
+
+# Compute the bottom of each rectangle
+sex_freq$ymin <- c(0, head(sex_freq$ymax, n=-1))
+
+# Compute label position
+sex_freq$labelPosition <- (sex_freq$ymax + sex_freq$ymin) / 2
+
+# Compute a good label
+sex_freq$label <- paste0(sex_freq$Sex, "\n value: ", sex_freq$Freq)
+
+ggplot(sex_freq, aes(ymax=ymax, ymin=ymin, xmax=4, xmin=3, fill=Sex)) +
+  geom_rect() +
+  geom_label( x=3.5, aes(y=labelPosition, label=label), size=6) +
+  scale_fill_brewer(palette=4) +
+  coord_polar(theta="y") +
+  xlim(c(2, 4)) +
+  theme_void() +
+  theme(legend.position = "none") +
+  ggtitle("Sex Ratio Plot")
+```
+
+Interestingly, exactly half of the collected data are female clients and the other half are male clients. This may prove problematic because it does not seem as though a fair random sample was taken. Perhaps the Marketing department purposefully send 300 direct mail pieces to male customers and 300 direct mail pieces to female customers, but this has the potential to influence any analysis in an artificial way because it is highly unlikely that he entire population of IST Bank & Trust customers is exactly 50% male and 50% female.
+
+-----------------------------
+
+#### Current Account Column Chart
+```{r}
+current_act_freq <- as.data.frame(table(data$current_act))
+names(current_act_freq)[1] = 'current_act'
+
+ggplot(current_act_freq, aes(x=current_act, y=Freq)) + geom_bar(stat = "identity") + ggtitle("Current Account Barplot")
+```
+
+It appears that `r round((455 / sum(current_act_freq$Freq))*100,2)`% of the 600 customers in the data have an existing account with IST Bank & Trust while `r round((145 / sum(current_act_freq$Freq))*100,2)`% do not. Upon comparing the two groups (those which have an account and those which do not), they appear to have similar attributes across the variables. The Marketing Department seemed to do a good job when choosing which potential customers, who do not have a current account with IST Bank & Trust, to send the direct mail pieces out to. 
+
+```{r}
+no_act <- bank_data_raw[which(bank_data_raw$current_act == "NO"), ]
+summary(no_act)
+```
+
+```{r}
+act <- bank_data_raw[which(bank_data_raw$current_act == "YES"), ]
+summary(act)
+```
+
+-----------------------------
+
+#### PEP Bar Chart
+```{r}
+pep_freq <- as.data.frame(table(data$pep))
+names(pep_freq)[1] = 'pep'
+
+ggplot(pep_freq, aes(x=pep, y=Freq)) + geom_bar(stat = "identity") + coord_flip() + ggtitle("PEP Barplot")
+```
+
+`r round((326 / sum(pep_freq$Freq))*100,2)`% of the customers from the direct mail campaign *do not* have a PEP with IST Bank & Trust while `r round((274 / sum(pep_freq$Freq))*100,2)`% of customers have an existing PEP. 
+
+-----------------------------
+
+#### Histogram of Income
+```{r}
+ggplot(bank_data_raw, aes(x=income)) + geom_histogram(binwidth = 3000) + ggtitle("Income Histogram")
+```
+As seen above, the data for income has a right-skew (Skewness = `r skewness(bank_data_raw$income, na.rm = T, type = 1)`). This means that the healthy majority of customers are on the lower end of the income range and out outliers are on the higher end of the income range. 
+
+-----------------------------
+
+#### Boxplot of Age
+```{r}
+ggplot(bank_data_raw, aes(x=age)) + geom_boxplot(fill="slateblue", alpha=0.2) + xlab("Age") + ggtitle("Age Boxplot")
+```
+In the above boxplot, the median age of a customer is shown as `r median(bank_data_raw$age)` years old. The bulk of the data appears to be between 30 - 56 years and there also appear to be no statistical outliers. 
+
+-----------------------------
+
+## Analysis and Model: Aprori Algorithm
+
+-----------------------------
+
+In order to use the Apriori algorithm properly, and interpret which column the output is coming from, the YES/NO columns are coerced to generate interpretable rules. In other words, the data is transformed into a transaction format to be input into the Apriori algorithm. 
+```{r}
+# Finish prep for algorithm. post-EDA
+algo_data <- as(data, "transactions")
+```
+
+-----------------------------
+
+The goal in utilizing this algorithm is to identify 20-30 strong rules. In order to find the correct parameters, different support and confidence thresholds were tested. The confidence was ultimately kept at 0.9 while the support threshold was set at 0.038. This yielded 28 rules, each with a lift above 1 (meaning they are significant and somehow meaningful). The trials for the testing of support and confidence thresholds can be seen below. 
+
+* Attempt 1:
+  + Support: 0.001
+  + Confidence: 0.9
+  + **Rules Generated**: 223
+* Attempt 2:
+  + Support: 0.1
+  + Confidence: 0.8
+  + **Rules Generated**: 19
+* Attempt 3:
+  + Support: 0.5
+  + Confidence: 0.8
+  + **Rules Generated**: 0
+* Attempt 4:
+  + Support: 0.5
+  + Confidence: 0.8
+  + **Rules Generated**: 0
+* Attempt 5:
+  + Support: 0.05
+  + Confidence: 0.85
+  + **Rules Generated**:32
+* Attempt 6:
+  + Support: 0.06
+  + Confidence: 0.9
+  + **Rules Generated**: 7
+* Attempt 7:
+  + Support: 0.045
+  + Confidence: 0.9
+  + **Rules Generated**: 21
+* Attempt 8:
+  + Support: 0.042
+  + Confidence: 0.9
+  + **Rules Generated**: 24
+* Attempt 9:
+  + Support: 0.038
+  + Confidence: 0.9
+  + **Rules Generated**: 28
+
+```{r}
+rules <- apriori(algo_data, parameter = list(supp = 0.038, conf = 0.9, maxlen = 3))
+
+rules <- sort(rules, by=c("confidence","support"), decreasing=TRUE)
+
+options(digits=2)
+inspect(rules[1:28])
+```
+
+Since IST Bank & Trust is attempting to identify candidates to market the PEP to, the rules for customers who have PEP was used (pep=pep=YES) for the right hand side of the algorithm. 
+
+```{r}
+rules <- apriori(data = algo_data, parameter = list(supp=0.038,conf = 0.9, minlen=3), 
+               appearance = list(default = "lhs", rhs = "pep=YES"),
+               control = list(verbose = F))
+
+summary(rules)
+```
+
+
+-----------------------------
+
+# Results
+
+-----------------------------
+
+```{r}
+rules <- sort(rules, decreasing= T, by= c("confidence","support"))
+
+options(digits=2)
+inspect(rules[1:26])
+```
+
+```{r}
+top_5 <- head(sort(rules, by = "lift", 10),5)
+plot(top_5, method="graph")
+```
+
+Some preliminary rules that were interesting can be seen below. While not the "official" top 5 rules (according to their support, confidence, and lift), each of these 4 rules included an itemset of 5 items on the left hand side which were associated with having a PEP. These rules were included for consideration because they cover the most variables on the left hand side. In other words, they may be a good starting point to test against the aforementioned customer profile as a preliminary threshold for candidacy prior to applying the more specific rules. 
+
+* {married=NO,children=0,save_act=YES,current_act=YES,mortgage=NO}	=>	{pep=YES}	 
+  + Support: 0.042
+  + Confidence: 0.96	 
+  + Lift: 2.1
+* {children=1,car=YES,save_act=YES,current_act=YES,mortgage=NO}	=>	{pep=YES}	
+  + Support: 0.038
+  + Confidence: 0.92	 
+  + Lift: 2.0
+* {sex=MALE,married=YES,children=1,save_act=YES,current_act=YES}	=>	{pep=YES}
+  + Support: 0.038
+  + Confidence: 0.92 
+  + Lift: 2.0
+* {married=YES,children=1,save_act=YES,current_act=YES,mortgage=NO}	=>	{pep=YES}	
+  + Support: 0.048
+  + Confidence: 0.91 
+  + Lift: 2.0
+
+
+Of the 26 rules, the 5 rules listed below appear to be the most interesting. This is due to their high confidence and lift. Each rule has a lift above 2.0 and a confidence above 0.96. Given the high lift, these rule appear to me meaningful and correlated to having a PEP. Coupled with the high confidence, it can be surmised that identifying potential candidates with these attributes have a higher likelihood of enrolling in the PEP program. Another point of interest was the absence of the region variable from any of the rules. This could be favorable for IST Bank & Trust because it appears that a customer from any region, so long as they trigger other associations, can be considered for the PEP. Finally, the only strong rule for income seemed to identify a candidate who makes between 20k - 30k annually. This appears to be an attribute of the typical customer at IST Bank & Trust. 
+
+According to the lift, confidence, and support the rule stating {age=FORTIES,children=1}	=> {pep=YES} appears to be the strongest. This rule has the highest of each of the measures and the highest count, as well. This rule could be compared to Rule 3 and Rule 4 to presume that an individual in their forties with one child and an account with IST Bank & Trust would make an ideal candidate for the PEP. 
+
+* **Rule 1:** {age=FORTIES,children=1}	=> {pep=YES}
+  + Support: 0.053
+  + Confidence: 1.00
+  + Lift: 2.2
+  + Count: 32
+* **Rule 2:** {income=20k-30k,married=YES,children=1}	=>	{pep=YES}
+  + Support: 0.047
+  + Confidence: 1.00
+  + Lift: 2.2
+  + Count: 28
+* **Rule 3:** {age=FORTIES,children=1,save_act=YES}	=>	{pep=YES}
+  + Support: 0.043
+  + Confidence: 1.00
+  + Lift: 2.2
+  + Count: 26
+* **Rule 4:** {age=FORTIES,children=1,current_act=YES}	=>	{pep=YES}
+  + Support: 0.042
+  + Confidence: 1.00
+  + Lift: 2.2
+  + Count: 25
+* **Rule 5:** {married=NO,children=0,save_act=YES,mortgage=NO}	=>	{pep=YES}
+  + Support: 0.052
+  + Confidence: 0.97
+  + Lift: 2.1
+  + Count: 31
+
+-----------------------------
+
+# Conclusions
+
+-----------------------------
+
+IST Bank & Trust has tasked the data science team with identifying which customers would make the best candidates for the PEP initiative. The Apriori algorithm was used to identify association rules for the best candidates, based on a sample data of 600 individuals from a direct mail campaign. Exploratory data analysis revealed that the typical customer at IST Bank & Trust is likely middle-aged, on the lower end of the annual income scale, has at least 1 dependent that they will claim on their taxes, lives in the Inner City, and there is a slight chance that they already have a PEP with IST Bank & Trust.
+
+The thresholds for the Apriori algorithm were tested to ensure accuracy the the output of strong association rules. After 9 attempts, the thresholds of support = 0.038 and confidence = 0.9 were chosen. These thresholds yielded 28 rules and seemed to fit the goal of identifying 20 - 30 string associations. Each rule had a lift over 2.0 and a confidence over 0.95, which signified that they were meaningful rules. From there, the parameter of having a current PEP (pep=Yes) was placed on the right hand side of the algorithm and the same parameters were used to identify the top 5 most compelling rules.
+
+Interestingly, only one of the strong rules identified income within the association. In addition, there appeared to be a bifurcation in rules for marriage. If an individual with a PEP was married, they had 1 child and an income of 20k - 30k. If an individual with a PEP was not married, they had no children or mortgage and had a savings account. These parameters can be used to automate a process for identifying candidates who are or are not married. Finally, it appeared that region was not a strong association for identifying a candidate for the PEP. In summation, the ideal candidate for the PEP program is a customer in their forties, has 1 child, and is a member of IST Bank & Trust (with a current checking account, savings account, or both). 
